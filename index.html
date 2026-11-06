@@ -64,7 +64,7 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/1vMBTp6J4gWgJLw7ZV4U1pOn
 // 「狀態」欄位中代表「還可領取」的字樣；其他都視為已領走。
 const AVAILABLE_WORDS = ["可領取", "可領", "有"];
 
-// 照片放在 repo 的資料夾（當「照片」欄只填檔名時使用）
+// 照片放在 repo 的資料夾。照片欄留空時，會自動找 photos/001.jpg（依「編號」）
 const PHOTO_DIR = "photos/";
 
 // 欄位名稱（對應 Sheets 第一列）
@@ -127,7 +127,10 @@ function render() {
   $("msg").hidden = list.length > 0;
   $("msg").textContent = "沒有符合的物品";
   $("grid").innerHTML = list.map(it => {
-    const av = isAvail(it), src = photoSrc(it[COL.photo]);
+    const av = isAvail(it);
+    // 「照片」欄有填就用它；沒填就自動找 photos/編號.jpg（編號補到 3 位數）
+    const idNum = String(it[COL.id] || "").replace(/\D/g, "");
+    const src = photoSrc(it[COL.photo]) || (idNum ? `${PHOTO_DIR}${idNum.padStart(3, "0")}.jpg` : "");
     const meta = it[COL.cat] || "";
     return `<div class="card ${av ? "" : "gone"}">
       <span class="badge">${av ? "可領取" : "已領走"}</span>
