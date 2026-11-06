@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>社宅二手交換｜物品清單</title>
+<style>
+  :root { --bg:#faf7f2; --card:#fff; --ink:#2b2b2b; --muted:#8a8478; --accent:#4f8a6b; --line:#e8e2d6; --gone:#b9b3a6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC","PingFang TC",sans-serif; }
+  header { padding:20px 16px 8px; max-width:960px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:22px; }
+  .sub { color:var(--muted); font-size:13px; }
+  .controls { position:sticky; top:0; background:var(--bg); padding:10px 16px; max-width:960px; margin:0 auto; z-index:5; border-bottom:1px solid var(--line); }
+  input[type=search] { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font-size:16px; background:#fff; }
+  .chips { display:flex; gap:8px; overflow-x:auto; padding:10px 0 2px; -webkit-overflow-scrolling:touch; }
+  .chip { flex:none; padding:6px 14px; border:1px solid var(--line); border-radius:999px; background:#fff; font-size:14px; cursor:pointer; color:var(--ink); }
+  .chip.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .toggle { display:flex; align-items:center; gap:8px; margin-top:8px; font-size:14px; }
+  .toggle input { width:18px; height:18px; accent-color:var(--accent); }
+  .count { margin-left:auto; color:var(--muted); font-size:13px; }
+  main { max-width:960px; margin:0 auto; padding:14px 16px 60px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; position:relative; }
+  .card.gone { opacity:.55; }
+  .card.gone img { filter:grayscale(1); }
+  .ph { width:100%; aspect-ratio:1/1; background:#efeae0; display:flex; align-items:center; justify-content:center; color:var(--gone); font-size:28px; }
+  .ph img { width:100%; height:100%; object-fit:cover; display:block; }
+  .body { padding:10px 12px 12px; }
+  .name { font-weight:600; font-size:15px; line-height:1.35; }
+  .meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .note { font-size:12px; margin-top:6px; color:#6b665c; }
+  .badge { position:absolute; top:8px; left:8px; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600; background:var(--accent); color:#fff; }
+  .card.gone .badge { background:#777; }
+  .qty { position:absolute; top:8px; right:8px; padding:3px 8px; border-radius:999px; font-size:12px; background:rgba(255,255,255,.92); border:1px solid var(--line); }
+  .msg { text-align:center; color:var(--muted); padding:40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏠 社宅二手交換｜物品清單</h1>
+  <div class="sub" id="updated">載入中…</div>
+</header>
+
+<div class="controls">
+  <input type="search" id="q" placeholder="搜尋物品名稱…">
+  <div class="chips" id="chips"></div>
+  <label class="toggle">
+    <input type="checkbox" id="onlyAvail" checked> 只看還可領取的
+    <span class="count" id="count"></span>
+  </label>
+</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="msg" hidden></div>
+</main>
+
+<script>
+/* ========== 設定區（只需要改這裡） ========== */
+// Google Sheets「發布到網路」(CSV 格式) 的網址。留空則顯示範例資料。
+const CSV_URL = "https://docs.google.com/spreadsheets/d/1vMBTp6J4gWgJLw7ZV4U1pOnYnkWXV-02QqMyKvuwPKo/gviz/tq?tqx=out:csv";
+
+// 「狀態」欄位中代表「還可領取」的字樣；其他都視為已領走。
+const AVAILABLE_WORDS = ["可領取", "可領", "有"];
+
+// 照片放在 repo 的資料夾（當「照片」欄只填檔名時使用）
+const PHOTO_DIR = "photos/";
+
+// 欄位名稱（對應 Sheets 第一列）
+const COL = { id:"編號", name:"名稱", cat:"分類", qty:"數量", status:"狀態", photo:"照片", note:"備註" };
+/* =========================================== */
+
+const DEMO = [
+  {編號:"001", 名稱:"電鍋（大同 10 人份）", 分類:"廚房用品", 數量:"1", 狀況:"良好", 狀態:"可領取", 照片:"", 備註:"附內鍋與蒸架"},
+  {編號:"002", 名稱:"童書 ×12 本", 分類:"書籍", 數量:"12", 狀況:"九成新", 狀態:"可領取", 照片:"", 備註:"3–6 歲繪本"},
+  {編號:"003", 名稱:"兒童外套 100cm", 分類:"衣物", 數量:"2", 狀況:"良好", 狀態:"已領走", 照片:"", 備註:""},
+  {編號:"004", 名稱:"檯燈", 分類:"家飾", 數量:"1", 狀況:"可正常使用", 狀態:"可領取", 照片:"", 備註:""},
+];
+
+let items = [], activeCat = "全部";
+const $ = id => document.getElementById(id);
+
+// 簡單的 CSV 解析（支援引號、換行）
+function parseCSV(text) {
+  const rows = []; let row = [], cur = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { cur += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(cur); cur = ""; }
+    else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ""; }
+    else if (c !== '\r') cur += c;
+  }
+  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+  const head = rows.shift().map(h => h.trim());
+  return rows.filter(r => r.some(v => v.trim() !== ""))
+             .map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] || "").trim()])));
+}
+
+function photoSrc(v) {
+  if (!v) return "";
+  if (/^https?:\/\//.test(v)) {
+    const m = v.match(/[-\w]{25,}/);                       // Drive 分享連結 → 縮圖
+    if (v.includes("drive.google.com") && m) return `https://drive.google.com/thumbnail?id=${m[0]}&sz=w600`;
+    return v;
+  }
+  if (/^[-\w]{25,}$/.test(v)) return `https://drive.google.com/thumbnail?id=${v}&sz=w600`; // 純 Drive 檔案 ID
+  return PHOTO_DIR + v;                                      // repo 內檔名
+}
+
+const isAvail = it => AVAILABLE_WORDS.some(w => (it[COL.status] || "").includes(w));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render() {
+  const q = $("q").value.trim().toLowerCase();
+  const only = $("onlyAvail").checked;
+  const list = items.filter(it =>
+    (activeCat === "全部" || it[COL.cat] === activeCat) &&
+    (!only || isAvail(it)) &&
+    (!q || (it[COL.name] + (it[COL.note] || "")).toLowerCase().includes(q))
+  );
+  $("count").textContent = `${list.length} 件`;
+  $("msg").hidden = list.length > 0;
+  $("msg").textContent = "沒有符合的物品";
+  $("grid").innerHTML = list.map(it => {
+    const av = isAvail(it), src = photoSrc(it[COL.photo]);
+    const meta = it[COL.cat] || "";
+    return `<div class="card ${av ? "" : "gone"}">
+      <span class="badge">${av ? "可領取" : "已領走"}</span>
+      ${it[COL.qty] && it[COL.qty] !== "1" ? `<span class="qty">×${esc(it[COL.qty])}</span>` : ""}
+      <div class="ph">${src ? `<img loading="lazy" src="${esc(src)}" alt="${esc(it[COL.name])}" onerror="this.remove()">` : "📦"}</div>
+      <div class="body">
+        <div class="name">${esc(it[COL.name])}</div>
+        <div class="meta">${esc(meta)}</div>
+        ${it[COL.note] ? `<div class="note">${esc(it[COL.note])}</div>` : ""}
+      </div></div>`;
+  }).join("");
+}
+
+function buildChips() {
+  const cats = ["全部", ...new Set(items.map(i => i[COL.cat]).filter(Boolean))];
+  $("chips").innerHTML = cats.map(c => `<button class="chip ${c === activeCat ? "on" : ""}" data-c="${esc(c)}">${esc(c)}</button>`).join("");
+  $("chips").querySelectorAll(".chip").forEach(b => b.onclick = () => { activeCat = b.dataset.c; buildChips(); render(); });
+}
+
+async function load() {
+  try {
+    if (CSV_URL) {
+      const res = await fetch(CSV_URL + (CSV_URL.includes("?") ? "&" : "?") + "t=" + Date.now());
+      if (!res.ok) throw new Error(res.status);
+      items = parseCSV(await res.text());
+      $("updated").textContent = "資料即時來自活動記錄表，更新可能延遲數分鐘";
+    } else {
+      items = DEMO;
+      $("updated").textContent = "（目前顯示範例資料，尚未連結 Google Sheets）";
+    }
+    buildChips(); render();
+  } catch (e) {
+    $("updated").textContent = "";
+    $("msg").hidden = false;
+    $("msg").textContent = "資料載入失敗，請稍後再試";
+  }
+}
+
+$("q").oninput = render;
+$("onlyAvail").onchange = render;
+load();
+</script>
+</body>
+</html>
